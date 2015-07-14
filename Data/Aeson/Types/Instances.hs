@@ -55,7 +55,7 @@ module Data.Aeson.Types.Instances
     , typeMismatch
     ) where
 
-import Control.Applicative ((<$>), (<*>), (<|>), pure, empty)
+import Control.Applicative ((<$>), (<*>), (<*), (*>), (<|>), pure, empty)
 import Control.Monad (when)
 import qualified Data.Aeson.Encode.Builder as E
 import qualified Data.ByteString.Builder as B
@@ -104,6 +104,7 @@ import qualified Data.Vector.Primitive as VP
 import qualified Data.Vector.Storable as VS
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.Vector.Mutable as VM ( unsafeNew, unsafeWrite )
+import Unsafe.Coerce (unsafeCoerce)
 
 #if MIN_VERSION_time(1,5,0)
 import Data.Time.Format (defaultTimeLocale, dateTimeFmt)
@@ -793,6 +794,10 @@ toNum :: Num n => T.Text -> n
 toNum = T.foldl' (\a c -> 10*a + digit c) 0
 {-# INLINE toNum #-}
 
+toNum_ :: Num n => n -> T.Text -> n
+toNum_ = T.foldl' (\a c -> 10*a + digit c)
+{-# INLINE toNum_ #-}
+
 digit :: Num n => Char -> n
 digit c = fromIntegral (ord c .&. 0x0f)
 {-# INLINE digit #-}
@@ -817,18 +822,22 @@ getTimeOfDay = do
     minute <- digits "minutes"
     -- Allow omission of seconds.  If seconds is omitted, don't try to
     -- parse the sub-second part.
-    (sec,subsec)
-           <- ((,) <$> (A.char ':' *> digits "seconds") <*> fract) <|> pure (0,0)
+    sec <- (A.char ':' *> getSeconds) <|> pure 0
 
-    let !picos' = sec + subsec
-
-    case makeTimeOfDayValid hour minute picos' of
+    case makeTimeOfDayValid hour minute sec of
       Nothing -> fail "invalid time of day"
       Just x  -> return $! x
 
     where
-      fract =
-        (A.char '.' *> (decimal <$> A.takeWhile1 isDigit)) <|> pure 0
+      getSeconds :: A.Parser Pico
+      getSeconds = do
+          secs <- digits "seconds"
+          (A.char '.' *> decimal secs) <|> (return $! fromInteger secs)
+
+      decimal :: Integer -> A.Parser Pico
+      decimal secs = do
+          digits <- A.takeWhile1 isDigit
+          return $! unsafeCoerce (toNum_ secs digits * 10^(12 - T.length digits))
 
 getTimeZone :: A.Parser TimeZone
 getTimeZone = do
